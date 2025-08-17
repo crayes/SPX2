@@ -1,0 +1,11 @@
+C:\spx\admin\Spx.App\Spx.App.Core\bin\Release\net8.0\Spx.App.Core.deps.json
+C:\spx\admin\Spx.App\Spx.App.Core\bin\Release\net8.0\Spx.App.Core.dll
+C:\spx\admin\Spx.App\Spx.App.Core\bin\Release\net8.0\Spx.App.Core.pdb
+C:\spx\admin\Spx.App\Spx.App.Core\obj\Release\net8.0\Spx.App.Core.GeneratedMSBuildEditorConfig.editorconfig
+C:\spx\admin\Spx.App\Spx.App.Core\obj\Release\net8.0\Spx.App.Core.AssemblyInfoInputs.cache
+C:\spx\admin\Spx.App\Spx.App.Core\obj\Release\net8.0\Spx.App.Core.AssemblyInfo.cs
+C:\spx\admin\Spx.App\Spx.App.Core\obj\Release\net8.0\Spx.App.Core.csproj.CoreCompileInputs.cache
+C:\spx\admin\Spx.App\Spx.App.Core\obj\Release\net8.0\Spx.App.Core.dll
+C:\spx\admin\Spx.App\Spx.App.Core\obj\Release\net8.0\refint\Spx.App.Core.dll
+C:\spx\admin\Spx.App\Spx.App.Core\obj\Release\net8.0\Spx.App.Core.pdb
+C:\spx\admin\Spx.App\Spx.App.Core\obj\Release\net8.0\ref\Spx.App.Core.dll
