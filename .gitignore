@@ -1,0 +1,36 @@
+# .NET
+**/bin/
+**/obj/
+.vs/
+
+# Visual Studio / VS Code
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider / JetBrains
+.idea/
+
+# NuGet
+*.nupkg
+*.snupkg
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Backups
+*.bak
+
+# Repo-specific artifacts
+worker.zip
+
+# Python venv (legacy)
+**/venv*/

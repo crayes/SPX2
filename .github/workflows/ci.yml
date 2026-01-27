@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-test-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: dotnet --info
+        run: dotnet --info
+
+      - name: Restore
+        run: dotnet restore SPX2.slnx
+
+      - name: Build (warnings as errors)
+        run: dotnet build SPX2.slnx -c Release -warnaserror
+
+      - name: Test
+        run: dotnet test SPX2.slnx -c Release --no-build
+
+      - name: Format (verify no changes)
+        run: dotnet format SPX2.slnx --verify-no-changes
