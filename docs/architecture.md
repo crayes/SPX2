@@ -9,6 +9,8 @@
 - `Worker` is the hosted background service loop
 - `IDeltaEngine` is the application entry point executed on each tick
 
+Current implementation of `IDeltaEngine` is `SharePointDeltaEngine`, which calls Microsoft Graph delta endpoints to fetch only changed/new files and then extracts document metadata (ListItem fields).
+
 ## Execution loop
 
 The worker:

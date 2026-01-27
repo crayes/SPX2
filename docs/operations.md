@@ -29,6 +29,11 @@ Example:
 
 - `Delta:Enabled` defaults to `false` to prevent accidental execution.
 
+## Delta state and output
+
+- Delta cursor/state is persisted to `SharePoint:DeltaStateFile` (default `.state/sharepoint-delta.json`).
+- Extracted metadata is appended as NDJSON to `SharePoint:OutputNdjsonPath` (default `.out/sharepoint-metadata.ndjson`).
+
 ## Health/monitoring
 
 Today the worker only emits logs and `ActivitySource` traces. If you need readiness/liveness endpoints, add a lightweight HTTP health endpoint in a future change (e.g., `Microsoft.Extensions.Diagnostics.HealthChecks`).

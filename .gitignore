@@ -21,6 +21,10 @@
 logs/
 *.log
 
+# Runtime state/output
+.state/
+.out/
+
 # OS
 .DS_Store
 .AppleDouble
