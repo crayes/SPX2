@@ -209,13 +209,39 @@ public sealed class SharePointDeltaEngine(
         var filtered = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
         foreach (var key in _sharePointOptions.IncludeFields)
         {
-            if (fields.TryGetValue(key, out var value))
+            if (TryGetField(fields, key, out var value))
             {
                 filtered[key] = value;
+            }
+            else
+            {
+                logger.LogDebug("SharePoint field '{field}' not found on item. Available fields: {count}.", key, fields.Count);
             }
         }
 
         return filtered;
+    }
+
+    private static bool TryGetField(Dictionary<string, object?> fields, string requestedKey, out object? value)
+    {
+        if (fields.TryGetValue(requestedKey, out value))
+        {
+            return true;
+        }
+
+        // SharePoint/Graph often exposes internal field names where spaces are encoded.
+        // Example display name: "Tipo de Documento" -> internal may be "Tipo_x0020_de_x0020_Documento".
+        if (requestedKey.Contains(' '))
+        {
+            var encodedSpaces = requestedKey.Replace(" ", "_x0020_", StringComparison.Ordinal);
+            if (fields.TryGetValue(encodedSpaces, out value))
+            {
+                return true;
+            }
+        }
+
+        value = null;
+        return false;
     }
 
     private static object? ConvertJson(JsonElement element)

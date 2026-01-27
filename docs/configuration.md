@@ -24,11 +24,31 @@ Current settings (see `DeltaOptions`):
     "DeltaStateFile": ".state/sharepoint-delta.json",
     "OutputNdjsonPath": ".out/sharepoint-metadata.ndjson",
     "MaxItemsPerRun": 500,
-    "IncludeFields": ["MetaTags"],
+    "IncludeFields": [
+      "Modified By",
+      "Tipo de Documento",
+      "StatusProcessamento",
+      "PalavraChave",
+      "SubpastaOrigem",
+      "DataProcessamento",
+      "CategoriaInteligente",
+      "ExtencaoArquivo",
+      "Tamanhbytes",
+      "CriadoPor",
+      "DataModificacao",
+      "DataCriacao"
+    ],
     "HttpTimeoutSeconds": 100
   }
 }
 ```
+
+Important: Microsoft Graph returns **internal field names** for many SharePoint columns.
+
+- Some columns appear exactly as displayed.
+- Others use encoded names, e.g. spaces become `_x0020_` (`"Tipo de Documento"` may appear as `Tipo_x0020_de_x0020_Documento`).
+
+The worker tries both forms for space-containing names, but if a field still comes out missing, use the internal name.
 
 ### Environment variables
 
