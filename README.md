@@ -52,6 +52,11 @@ Environment variable overrides (standard .NET configuration):
 
 See [docs/configuration.md](docs/configuration.md) for details.
 
+## Operations
+
+- Runbook: [docs/runbook.md](docs/runbook.md)
+- Release/Deploy: [docs/release-deploy.md](docs/release-deploy.md)
+
 ## Repo layout
 
 - `worker/` — production .NET worker (`Spx.DeltaWorker`)
