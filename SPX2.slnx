@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/tests/">
+    <Project Path="tests/Spx.DeltaWorker.Tests/Spx.DeltaWorker.Tests.csproj" />
+  </Folder>
+  <Folder Name="/worker/">
+    <Project Path="worker/Spx.DeltaWorker/Spx.DeltaWorker.csproj" />
+  </Folder>
+</Solution>
