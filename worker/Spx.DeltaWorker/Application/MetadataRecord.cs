@@ -6,4 +6,5 @@ public sealed record MetadataRecord(
     string? WebUrl,
     string? ParentPath,
     DateTimeOffset? LastModifiedUtc,
-    IReadOnlyDictionary<string, object?> Fields);
+    IReadOnlyDictionary<string, object?> Fields,
+    IReadOnlyDictionary<string, object>? UpdatedFields);

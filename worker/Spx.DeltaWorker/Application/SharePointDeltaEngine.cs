@@ -187,7 +187,8 @@ public sealed class SharePointDeltaEngine(
                 item.WebUrl,
                 item.ParentPath,
                 item.LastModifiedUtc,
-                existingFields);
+                existingFields,
+                fieldsToUpdate.Count > 0 ? fieldsToUpdate : null);
 
             if (fieldsToUpdate.Count > 0)
             {
