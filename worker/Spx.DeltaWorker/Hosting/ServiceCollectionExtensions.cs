@@ -30,7 +30,11 @@ public static class ServiceCollectionExtensions
             return new ClientSecretCredential(options.TenantId, options.ClientId, options.ClientSecret);
         });
 
-        services.AddHttpClient<GraphApiClient>();
+        services.AddHttpClient<GraphApiClient>((sp, client) =>
+        {
+            var options = sp.GetRequiredService<IOptions<SharePointOptions>>().Value;
+            client.Timeout = TimeSpan.FromSeconds(options.HttpTimeoutSeconds);
+        });
 
         services.AddSingleton<IDeltaStateStore, FileDeltaStateStore>();
         services.AddSingleton<IMetadataSink, NdjsonFileMetadataSink>();

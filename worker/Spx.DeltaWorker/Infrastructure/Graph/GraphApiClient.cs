@@ -19,7 +19,6 @@ public sealed class GraphApiClient(
 
     public async Task<JsonDocument> GetJsonAsync(string url, CancellationToken cancellationToken)
     {
-        httpClient.Timeout = TimeSpan.FromSeconds(options.Value.HttpTimeoutSeconds);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -39,7 +38,6 @@ public sealed class GraphApiClient(
     /// </summary>
     public async Task<bool> PatchJsonAsync(string url, object payload, CancellationToken cancellationToken)
     {
-        httpClient.Timeout = TimeSpan.FromSeconds(options.Value.HttpTimeoutSeconds);
 
         for (var attempt = 0; attempt < MaxRetries; attempt++)
         {
