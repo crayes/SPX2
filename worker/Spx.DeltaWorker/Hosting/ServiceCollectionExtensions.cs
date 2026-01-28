@@ -5,6 +5,7 @@ using Azure.Identity;
 using Microsoft.Extensions.Options;
 using Spx.DeltaWorker.Application;
 using Spx.DeltaWorker.Configuration;
+using Spx.DeltaWorker.Infrastructure;
 using Spx.DeltaWorker.Infrastructure.Graph;
 using Spx.DeltaWorker.Infrastructure.Sinks;
 using Spx.DeltaWorker.Infrastructure.State;
@@ -41,6 +42,14 @@ public static class ServiceCollectionExtensions
 
         // Updater para PATCH nos campos do SharePoint
         services.AddSingleton<SharePointFieldsUpdater>();
+
+        // Rate limiter adaptativo (portado do Python)
+        services.AddSingleton<AdaptiveRateLimiter>(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<DeltaOptions>>().Value;
+            var logger = sp.GetRequiredService<ILogger<AdaptiveRateLimiter>>();
+            return new AdaptiveRateLimiter(logger, options.RateLimitPerSecond);
+        });
 
         services.AddSingleton<IDeltaEngine, SharePointDeltaEngine>();
         services.AddHostedService<Worker>();

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 using Spx.DeltaWorker.Configuration;
+using Spx.DeltaWorker.Infrastructure;
 using Spx.DeltaWorker.Infrastructure.Graph;
 using Spx.DeltaWorker.Infrastructure.State;
 
@@ -12,6 +13,7 @@ public sealed class SharePointDeltaEngine(
     IMetadataSink sink,
     IDeltaStateStore stateStore,
     SharePointFieldsUpdater fieldsUpdater,
+    AdaptiveRateLimiter rateLimiter,
     IOptions<DeltaOptions> deltaOptions,
     IOptions<SharePointOptions> sharePointOptions) : IDeltaEngine
 {
@@ -49,84 +51,80 @@ public sealed class SharePointDeltaEngine(
         var processed = 0;
         var updated = 0;
         var skipped = 0;
+        var failed = 0;
         string? lastNextLink = null;
         string? lastDeltaLink = null;
 
+        logger.LogInformation("Starting delta processing with {workers} parallel workers, rate limit {rate}/s",
+            _deltaOptions.MaxWorkers, _deltaOptions.RateLimitPerSecond);
+
         while (!string.IsNullOrWhiteSpace(link) && processed < _sharePointOptions.MaxItemsPerRun)
         {
+            await rateLimiter.AcquireAsync(cancellationToken);
             using var json = await graph.GetJsonAsync(link, cancellationToken);
             var page = GraphModels.ParsePage(json);
 
             lastNextLink = page.NextLink;
             lastDeltaLink = page.DeltaLink;
 
-            foreach (var item in page.Items)
+            // Coleta todos os itens válidos da página
+            var itemsToProcess = page.Items
+                .Where(item => !item.IsDeleted && !item.IsFolder && item.IsFile && !string.IsNullOrWhiteSpace(item.Id))
+                .Take(_sharePointOptions.MaxItemsPerRun - processed)
+                .ToList();
+
+            if (itemsToProcess.Count == 0)
             {
-                if (processed >= _sharePointOptions.MaxItemsPerRun)
-                {
-                    break;
-                }
-
-                // Ignora itens deletados, pastas, ou sem ID
-                if (item.IsDeleted || item.IsFolder || !item.IsFile || string.IsNullOrWhiteSpace(item.Id))
-                {
-                    continue;
-                }
-
-                // Obtém campos existentes do SharePoint
-                var (existingFields, itemDetails) = await GetItemFieldsAndDetailsAsync(driveId, item.Id, cancellationToken);
-
-                // Gera os 14 campos de metadados inteligentes
-                var generatedMetadata = MetadataGenerator.GerarMetadados(
-                    fileName: item.Name,
-                    parentPath: item.ParentPath ?? string.Empty,
-                    sizeBytes: itemDetails.Size,
-                    createdDateTime: itemDetails.CreatedDateTime,
-                    lastModifiedDateTime: item.LastModifiedUtc,
-                    createdByDisplayName: itemDetails.CreatedByDisplayName);
-
-                // Filtra apenas campos que precisam atualização (não sobrescreve existentes)
-                var fieldsToUpdate = fieldsUpdater.FilterEmptyFields(
-                    generatedMetadata,
-                    existingFields,
-                    forceUpdate: _sharePointOptions.ForceUpdate);
-
-                if (fieldsToUpdate.Count > 0)
-                {
-                    // Atualiza os campos no SharePoint
-                    var success = await fieldsUpdater.UpdateFieldsAsync(driveId, item.Id, fieldsToUpdate, cancellationToken);
-
-                    if (success)
-                    {
-                        updated++;
-                        logger.LogInformation("Updated {count} fields: {path}",
-                            fieldsToUpdate.Count,
-                            string.IsNullOrWhiteSpace(item.ParentPath) ? item.Name : $"{item.ParentPath}/{item.Name}");
-                    }
-                    else
-                    {
-                        logger.LogWarning("Failed to update: {path}",
-                            string.IsNullOrWhiteSpace(item.ParentPath) ? item.Name : $"{item.ParentPath}/{item.Name}");
-                    }
-                }
-                else
-                {
-                    skipped++;
-                    logger.LogDebug("Skipped (fields already filled): {name}", item.Name);
-                }
-
-                // Também grava no sink local (NDJSON) para histórico/debug
-                var record = new MetadataRecord(
-                    item.Id,
-                    item.Name,
-                    item.WebUrl,
-                    item.ParentPath,
-                    item.LastModifiedUtc,
-                    existingFields);
-
-                await sink.WriteAsync(record, cancellationToken);
-                processed++;
+                link = page.NextLink;
+                continue;
             }
+
+            logger.LogDebug("Processing batch of {count} items in parallel...", itemsToProcess.Count);
+
+            // Processa em paralelo usando Parallel.ForEachAsync
+            var results = new System.Collections.Concurrent.ConcurrentBag<ProcessingResult>();
+
+            await Parallel.ForEachAsync(
+                itemsToProcess,
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = _deltaOptions.MaxWorkers,
+                    CancellationToken = cancellationToken
+                },
+                async (item, ct) =>
+                {
+                    var result = await ProcessItemAsync(driveId, item, ct);
+                    results.Add(result);
+                });
+
+            // Contabiliza resultados
+            foreach (var result in results)
+            {
+                processed++;
+                switch (result.Status)
+                {
+                    case ProcessingStatus.Updated:
+                        updated++;
+                        break;
+                    case ProcessingStatus.Skipped:
+                        skipped++;
+                        break;
+                    case ProcessingStatus.Failed:
+                        failed++;
+                        break;
+                }
+
+                // Grava no sink local (NDJSON) para histórico/debug
+                if (result.Record != null)
+                {
+                    await sink.WriteAsync(result.Record, cancellationToken);
+                }
+            }
+
+            // Log de progresso a cada batch
+            var (currentRate, queuedRequests) = rateLimiter.GetStats();
+            logger.LogInformation("Batch complete: {processed} total ({updated} updated, {skipped} skipped, {failed} failed) - Rate: {rate}/s",
+                processed, updated, skipped, failed, currentRate);
 
             link = page.NextLink;
 
@@ -150,8 +148,77 @@ public sealed class SharePointDeltaEngine(
             await stateStore.SaveAsync(newState, cancellationToken);
         }
 
-        logger.LogInformation("Delta tick complete: {processed} processed, {updated} updated, {skipped} skipped.",
-            processed, updated, skipped);
+        logger.LogInformation("Delta tick complete: {processed} processed, {updated} updated, {skipped} skipped, {failed} failed.",
+            processed, updated, skipped, failed);
+    }
+
+    private async Task<ProcessingResult> ProcessItemAsync(string driveId, GraphModels.DriveItem item, CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Rate limiting antes de cada request
+            await rateLimiter.AcquireAsync(cancellationToken);
+
+            // Obtém campos existentes do SharePoint
+            var (existingFields, itemDetails) = await GetItemFieldsAndDetailsAsync(driveId, item.Id, cancellationToken);
+
+            // Gera os 14 campos de metadados inteligentes
+            var generatedMetadata = MetadataGenerator.GerarMetadados(
+                fileName: item.Name,
+                parentPath: item.ParentPath ?? string.Empty,
+                sizeBytes: itemDetails.Size,
+                createdDateTime: itemDetails.CreatedDateTime,
+                lastModifiedDateTime: item.LastModifiedUtc,
+                createdByDisplayName: itemDetails.CreatedByDisplayName);
+
+            // Filtra apenas campos que precisam atualização (não sobrescreve existentes)
+            var fieldsToUpdate = fieldsUpdater.FilterEmptyFields(
+                generatedMetadata,
+                existingFields,
+                forceUpdate: _sharePointOptions.ForceUpdate);
+
+            var itemPath = string.IsNullOrWhiteSpace(item.ParentPath)
+                ? item.Name
+                : $"{item.ParentPath}/{item.Name}";
+
+            var record = new MetadataRecord(
+                item.Id,
+                item.Name,
+                item.WebUrl,
+                item.ParentPath,
+                item.LastModifiedUtc,
+                existingFields);
+
+            if (fieldsToUpdate.Count > 0)
+            {
+                // Rate limiting antes do PATCH
+                await rateLimiter.AcquireAsync(cancellationToken);
+
+                // Atualiza os campos no SharePoint
+                var success = await fieldsUpdater.UpdateFieldsAsync(driveId, item.Id, fieldsToUpdate, cancellationToken);
+
+                if (success)
+                {
+                    logger.LogInformation("✅ Updated {count} fields: {path}", fieldsToUpdate.Count, itemPath);
+                    return new ProcessingResult(ProcessingStatus.Updated, record);
+                }
+                else
+                {
+                    logger.LogWarning("❌ Failed to update: {path}", itemPath);
+                    return new ProcessingResult(ProcessingStatus.Failed, record);
+                }
+            }
+            else
+            {
+                logger.LogDebug("⏭️ Skipped (fields already filled): {name}", item.Name);
+                return new ProcessingResult(ProcessingStatus.Skipped, record);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error processing item {id}: {name}", item.Id, item.Name);
+            return new ProcessingResult(ProcessingStatus.Failed, null);
+        }
     }
 
     private string BuildInitialDeltaUrl(string driveId)
@@ -165,6 +232,8 @@ public sealed class SharePointDeltaEngine(
 
     private async Task<string> ResolveSiteIdAsync(CancellationToken cancellationToken)
     {
+        await rateLimiter.AcquireAsync(cancellationToken);
+
         var siteUri = new Uri(_sharePointOptions.SiteUrl);
         var sitePath = siteUri.AbsolutePath.TrimEnd('/');
         var url = $"https://graph.microsoft.com/v1.0/sites/{siteUri.Host}:{sitePath}";
@@ -184,6 +253,8 @@ public sealed class SharePointDeltaEngine(
 
     private async Task<string> ResolveDriveIdAsync(string siteId, CancellationToken cancellationToken)
     {
+        await rateLimiter.AcquireAsync(cancellationToken);
+
         var url = $"https://graph.microsoft.com/v1.0/sites/{Uri.EscapeDataString(siteId)}/drives";
 
         using var json = await graph.GetJsonAsync(url, cancellationToken);
@@ -290,4 +361,13 @@ public sealed class SharePointDeltaEngine(
         public DateTimeOffset? CreatedDateTime { get; init; }
         public string? CreatedByDisplayName { get; init; }
     }
+
+    private enum ProcessingStatus
+    {
+        Updated,
+        Skipped,
+        Failed
+    }
+
+    private record ProcessingResult(ProcessingStatus Status, MetadataRecord? Record);
 }
