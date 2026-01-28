@@ -5,7 +5,7 @@ SPX2 is a .NET Worker Service that synchronizes SharePoint document metadata usi
 ## Features
 
 - **Delta API Sync** - Efficient incremental sync using Microsoft Graph delta tokens
-- **Smart Metadata Generation** - Automatically generates 14 metadata fields based on filename and path
+- **Smart Metadata Generation** - Automatically generates 15 metadata fields based on filename and path
 - **PATCH to SharePoint** - Updates SharePoint list item fields directly
 - **Adaptive Rate Limiting** - Avoids 429 errors with intelligent throttling
 - **Retry Logic** - Handles transient errors with exponential backoff
@@ -67,7 +67,7 @@ dotnet run --project worker/Spx.DeltaWorker -- --Logging:LogLevel:Default=Debug
 
 ## Generated Metadata Fields
 
-The worker generates 14 metadata fields for each document:
+The worker generates 15 metadata fields for each document:
 
 | Field | Description | Example |
 |-------|-------------|--------|
@@ -85,6 +85,7 @@ The worker generates 14 metadata fields for each document:
 | `DataProcessamentoIA` | Processing timestamp | `2024-06-21T08:00:00Z` |
 | `CriadoPor` | Created by | `João Silva` |
 | `IdadeArquivoDias` | Age in days | `157` |
+| `IdadeArquivoDescricao` | Age with unit | `5 meses` |
 
 ## Configuration
 

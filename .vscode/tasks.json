@@ -1,0 +1,16 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Clean delta state",
+      "type": "shell",
+      "command": "/bin/rm",
+      "args": [
+        "-f",
+        ".state/sharepoint-delta.json"
+      ],
+      "problemMatcher": [],
+      "group": "none"
+    }
+  ]
+}

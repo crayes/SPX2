@@ -142,7 +142,7 @@ Recommended settings for large document libraries:
 
 ## Generated Metadata Fields
 
-The worker automatically generates these 14 fields for each file:
+The worker automatically generates these 15 fields for each file:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -160,6 +160,7 @@ The worker automatically generates these 14 fields for each file:
 | `DataProcessamentoIA` | datetime | Processing timestamp |
 | `CriadoPor` | string | Creator display name |
 | `IdadeArquivoDias` | number | Age in days |
+| `IdadeArquivoDescricao` | string | Age with unit (dias/meses/anos) |
 
 ### Type Classification
 

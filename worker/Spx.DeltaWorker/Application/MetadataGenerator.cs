@@ -62,8 +62,9 @@ public static class MetadataGenerator
         var extensao = GetExtension(fileName);
         var agora = DateTimeOffset.UtcNow;
         var idadeDias = createdDateTime.HasValue
-            ? (int)(agora - createdDateTime.Value).TotalDays
+            ? Math.Max(0, (int)Math.Floor((agora - createdDateTime.Value).TotalDays))
             : 0;
+        var idadeDescricao = FormatAgeDescription(idadeDias);
 
         var isEmail = extensao.Equals("eml", StringComparison.OrdinalIgnoreCase) ||
                       extensao.Equals("msg", StringComparison.OrdinalIgnoreCase);
@@ -85,7 +86,8 @@ public static class MetadataGenerator
             ["TamanhoBytes"] = sizeBytes,
             ["ExtensaoArquivo"] = extensao.ToUpperInvariant(),
             ["DataCriacaoOriginal"] = (createdDateTime ?? agora).ToString("yyyy-MM-ddTHH:mm:ss"),
-            ["IdadeArquivoDias"] = idadeDias
+            ["IdadeArquivoDias"] = idadeDias,
+            ["IdadeArquivoDescricao"] = idadeDescricao
         };
     }
 
@@ -167,5 +169,22 @@ public static class MetadataGenerator
     {
         var lastDot = fileName.LastIndexOf('.');
         return lastDot > 0 ? fileName[..lastDot] : fileName;
+    }
+
+    private static string FormatAgeDescription(int idadeDias)
+    {
+        if (idadeDias < 30)
+        {
+            return idadeDias == 1 ? "1 dia" : $"{idadeDias} dias";
+        }
+
+        if (idadeDias < 365)
+        {
+            var meses = Math.Max(1, idadeDias / 30);
+            return meses == 1 ? "1 mes" : $"{meses} meses";
+        }
+
+        var anos = Math.Max(1, idadeDias / 365);
+        return anos == 1 ? "1 ano" : $"{anos} anos";
     }
 }

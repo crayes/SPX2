@@ -163,9 +163,11 @@ public sealed class SharePointDeltaEngine(
             var (existingFields, itemDetails) = await GetItemFieldsAndDetailsAsync(driveId, item.Id, cancellationToken);
 
             // Gera os 14 campos de metadados inteligentes
+            var normalizedParentPath = NormalizeParentPath(item.ParentPath);
+
             var generatedMetadata = MetadataGenerator.GerarMetadados(
                 fileName: item.Name,
-                parentPath: item.ParentPath ?? string.Empty,
+                parentPath: normalizedParentPath,
                 sizeBytes: itemDetails.Size,
                 createdDateTime: itemDetails.CreatedDateTime,
                 lastModifiedDateTime: item.LastModifiedUtc,
@@ -177,15 +179,15 @@ public sealed class SharePointDeltaEngine(
                 existingFields,
                 forceUpdate: _sharePointOptions.ForceUpdate);
 
-            var itemPath = string.IsNullOrWhiteSpace(item.ParentPath)
+            var itemPath = string.IsNullOrWhiteSpace(normalizedParentPath)
                 ? item.Name
-                : $"{item.ParentPath}/{item.Name}";
+                : $"{normalizedParentPath}/{item.Name}";
 
             var record = new MetadataRecord(
                 item.Id,
                 item.Name,
                 item.WebUrl,
-                item.ParentPath,
+                normalizedParentPath,
                 item.LastModifiedUtc,
                 existingFields,
                 fieldsToUpdate.Count > 0 ? fieldsToUpdate : null);
@@ -294,13 +296,15 @@ public sealed class SharePointDeltaEngine(
         var root = json.RootElement;
 
         // Extrai detalhes do item
+        var createdByFromFields = ExtractCreatedByDisplayNameFromFields(root);
+
         var details = new ItemDetails
         {
             Size = root.TryGetProperty("size", out var sizeProp) ? sizeProp.GetInt64() : 0,
             CreatedDateTime = root.TryGetProperty("createdDateTime", out var createdProp)
                 ? DateTimeOffset.Parse(createdProp.GetString()!)
                 : null,
-            CreatedByDisplayName = ExtractCreatedByDisplayName(root)
+            CreatedByDisplayName = createdByFromFields ?? ExtractCreatedByDisplayName(root)
         };
 
         // Extrai campos existentes
@@ -342,6 +346,89 @@ public sealed class SharePointDeltaEngine(
         }
 
         return null;
+    }
+
+    private static string? ExtractCreatedByDisplayNameFromFields(JsonElement root)
+    {
+        if (!root.TryGetProperty("listItem", out var listItem) ||
+            listItem.ValueKind != JsonValueKind.Object ||
+            !listItem.TryGetProperty("fields", out var fieldsElement) ||
+            fieldsElement.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (TryGetUserDisplayName(fieldsElement, "Author", out var author))
+        {
+            return author;
+        }
+
+        if (TryGetUserDisplayName(fieldsElement, "AuthorLookupValue", out var authorLookup))
+        {
+            return authorLookup;
+        }
+
+        if (TryGetUserDisplayName(fieldsElement, "Created By", out var createdBy))
+        {
+            return createdBy;
+        }
+
+        if (TryGetUserDisplayName(fieldsElement, "Created_x0020_By", out var createdByEncoded))
+        {
+            return createdByEncoded;
+        }
+
+        return null;
+    }
+
+    private static bool TryGetUserDisplayName(JsonElement fieldsElement, string propertyName, out string? value)
+    {
+        value = null;
+        if (!fieldsElement.TryGetProperty(propertyName, out var prop))
+        {
+            return false;
+        }
+
+        if (prop.ValueKind == JsonValueKind.String)
+        {
+            value = prop.GetString();
+            return !string.IsNullOrWhiteSpace(value);
+        }
+
+        if (prop.ValueKind == JsonValueKind.Object)
+        {
+            if (prop.TryGetProperty("displayName", out var displayName) && displayName.ValueKind == JsonValueKind.String)
+            {
+                value = displayName.GetString();
+                return !string.IsNullOrWhiteSpace(value);
+            }
+
+            if (prop.TryGetProperty("email", out var email) && email.ValueKind == JsonValueKind.String)
+            {
+                value = email.GetString();
+                return !string.IsNullOrWhiteSpace(value);
+            }
+        }
+
+        return false;
+    }
+
+    private static string NormalizeParentPath(string? parentPath)
+    {
+        if (string.IsNullOrWhiteSpace(parentPath))
+        {
+            return string.Empty;
+        }
+
+        const string marker = "/root:";
+        var index = parentPath.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (index >= 0)
+        {
+            var normalized = parentPath[(index + marker.Length)..];
+            return normalized.Trim('/');
+        }
+
+        return parentPath.Trim('/');
     }
 
     private static object? ConvertJson(JsonElement element)
