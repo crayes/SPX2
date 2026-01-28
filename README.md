@@ -7,8 +7,20 @@ SPX2 is a .NET Worker Service for **incremental SharePoint metadata processing**
 - **Delta API**: Detects new/modified files incrementally (no full scans)
 - **Smart Metadata Generation**: Auto-generates 14 metadata fields for each file
 - **PATCH to SharePoint**: Updates SharePoint columns via Graph API
-- **Rate Limiting**: Handles HTTP 429/503 with exponential backoff
+- **Parallel Processing**: Configurable workers (default: 20) for high throughput
+- **Adaptive Rate Limiting**: Auto-adjusts request rate on HTTP 429 (ported from Python)
+- **Retry with Backoff**: Handles HTTP 429/503 with exponential backoff
 - **State Persistence**: Saves delta tokens for reliable incremental sync
+
+## Performance
+
+Optimized for large document libraries (200,000+ files):
+
+| Mode | Throughput | Notes |
+|------|------------|-------|
+| Sequential | ~2 files/sec | Single thread |
+| Parallel (20 workers) | ~40 files/sec | Default configuration |
+| With Delta | Only changes | After initial sync, processes only new/modified files |
 
 ## Generated Metadata Fields
 
@@ -43,10 +55,11 @@ SPX2 is a .NET Worker Service for **incremental SharePoint metadata processing**
 dotnet restore SPX2.slnx
 dotnet build SPX2.slnx -c Release
 
-# Configure secrets
-dotnet user-secrets set "SharePoint:TenantId" "<tenant-guid>" --project worker/Spx.DeltaWorker
-dotnet user-secrets set "SharePoint:ClientId" "<app-id>" --project worker/Spx.DeltaWorker
-dotnet user-secrets set "SharePoint:ClientSecret" "<secret>" --project worker/Spx.DeltaWorker
+# Configure secrets (without < >)
+dotnet user-secrets init --project worker/Spx.DeltaWorker
+dotnet user-secrets set "SharePoint:TenantId" "your-tenant-guid" --project worker/Spx.DeltaWorker
+dotnet user-secrets set "SharePoint:ClientId" "your-app-id" --project worker/Spx.DeltaWorker
+dotnet user-secrets set "SharePoint:ClientSecret" "your-secret" --project worker/Spx.DeltaWorker
 
 # Run
 dotnet run --project worker/Spx.DeltaWorker
@@ -62,7 +75,9 @@ Minimal `appsettings.json`:
 {
   "Delta": {
     "Enabled": true,
-    "PollIntervalSeconds": 7200
+    "PollIntervalSeconds": 7200,
+    "MaxWorkers": 20,
+    "RateLimitPerSecond": 20
   },
   "SharePoint": {
     "SiteUrl": "https://contoso.sharepoint.com/sites/documents",
@@ -80,17 +95,32 @@ Minimal `appsettings.json`:
 ├─────────────────────────────────────────────────────────────────┤
 │  1. Timer triggers every N seconds (PollIntervalSeconds)       │
 │  2. Delta API detects new/modified files                       │
-│  3. MetadataGenerator creates 14 smart fields                  │
-│  4. SharePointFieldsUpdater PATCHes SharePoint columns         │
-│  5. State saved for next incremental run                       │
+│  3. Parallel.ForEachAsync processes batch with N workers       │
+│  4. AdaptiveRateLimiter controls request rate (auto-adjusts)   │
+│  5. MetadataGenerator creates 14 smart fields                  │
+│  6. SharePointFieldsUpdater PATCHes SharePoint columns         │
+│  7. State saved for next incremental run                       │
 └─────────────────────────────────────────────────────────────────┘
+```
+
+## Adaptive Rate Limiting
+
+Ported from Python (`sharepoint_ultra/rate_limiter.py`):
+
+- Starts at configured rate (default: 20 req/s)
+- On HTTP 429: reduces rate by 50% (20 → 10 → 5)
+- On success: gradually increases rate
+- Respects `Retry-After` header from Graph API
+
+```
+⚠️ Rate limited (429). Reducing rate to 10/s. Waiting 30s...
 ```
 
 ## Repo Layout
 
 - `worker/Spx.DeltaWorker/` — Production worker service
   - `Application/` — Business logic (DeltaEngine, MetadataGenerator)
-  - `Infrastructure/` — Graph API client, state persistence
+  - `Infrastructure/` — Graph API client, RateLimiter, state persistence
   - `Configuration/` — Options classes
   - `Hosting/` — DI setup
 - `tests/` — xUnit tests
@@ -105,4 +135,4 @@ Minimal `appsettings.json`:
 
 ## Related Projects
 
-- [Sharepoint_Extrator_14.9](https://github.com/crayes/Sharepoint_Extrator_14.9) — Python version (batch processing, maintenance scripts)
+- [Sharepoint_Extrator_14.9](https://github.com/crayes/Sharepoint_Extrator_14.9) — Python version (maintenance: empty folders, old files cleanup)
