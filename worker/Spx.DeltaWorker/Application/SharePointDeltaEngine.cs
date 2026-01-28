@@ -11,6 +11,7 @@ public sealed class SharePointDeltaEngine(
     GraphApiClient graph,
     IMetadataSink sink,
     IDeltaStateStore stateStore,
+    SharePointFieldsUpdater fieldsUpdater,
     IOptions<DeltaOptions> deltaOptions,
     IOptions<SharePointOptions> sharePointOptions) : IDeltaEngine
 {
@@ -46,6 +47,8 @@ public sealed class SharePointDeltaEngine(
         }
 
         var processed = 0;
+        var updated = 0;
+        var skipped = 0;
         string? lastNextLink = null;
         string? lastDeltaLink = null;
 
@@ -64,21 +67,62 @@ public sealed class SharePointDeltaEngine(
                     break;
                 }
 
+                // Ignora itens deletados, pastas, ou sem ID
                 if (item.IsDeleted || item.IsFolder || !item.IsFile || string.IsNullOrWhiteSpace(item.Id))
                 {
                     continue;
                 }
 
-                var fields = await GetItemFieldsAsync(driveId, item.Id, cancellationToken);
-                var filtered = FilterFields(fields);
+                // Obtém campos existentes do SharePoint
+                var (existingFields, itemDetails) = await GetItemFieldsAndDetailsAsync(driveId, item.Id, cancellationToken);
 
+                // Gera os 14 campos de metadados inteligentes
+                var generatedMetadata = MetadataGenerator.GerarMetadados(
+                    fileName: item.Name,
+                    parentPath: item.ParentPath ?? string.Empty,
+                    sizeBytes: itemDetails.Size,
+                    createdDateTime: itemDetails.CreatedDateTime,
+                    lastModifiedDateTime: item.LastModifiedUtc,
+                    createdByDisplayName: itemDetails.CreatedByDisplayName);
+
+                // Filtra apenas campos que precisam atualização (não sobrescreve existentes)
+                var fieldsToUpdate = fieldsUpdater.FilterEmptyFields(
+                    generatedMetadata,
+                    existingFields,
+                    forceUpdate: _sharePointOptions.ForceUpdate);
+
+                if (fieldsToUpdate.Count > 0)
+                {
+                    // Atualiza os campos no SharePoint
+                    var success = await fieldsUpdater.UpdateFieldsAsync(driveId, item.Id, fieldsToUpdate, cancellationToken);
+
+                    if (success)
+                    {
+                        updated++;
+                        logger.LogInformation("Updated {count} fields: {path}",
+                            fieldsToUpdate.Count,
+                            string.IsNullOrWhiteSpace(item.ParentPath) ? item.Name : $"{item.ParentPath}/{item.Name}");
+                    }
+                    else
+                    {
+                        logger.LogWarning("Failed to update: {path}",
+                            string.IsNullOrWhiteSpace(item.ParentPath) ? item.Name : $"{item.ParentPath}/{item.Name}");
+                    }
+                }
+                else
+                {
+                    skipped++;
+                    logger.LogDebug("Skipped (fields already filled): {name}", item.Name);
+                }
+
+                // Também grava no sink local (NDJSON) para histórico/debug
                 var record = new MetadataRecord(
                     item.Id,
                     item.Name,
                     item.WebUrl,
                     item.ParentPath,
                     item.LastModifiedUtc,
-                    filtered);
+                    existingFields);
 
                 await sink.WriteAsync(record, cancellationToken);
                 processed++;
@@ -92,6 +136,7 @@ public sealed class SharePointDeltaEngine(
             }
         }
 
+        // Salva estado para próxima execução
         var newState = new DeltaState(
             ContinuationLink: processed >= _sharePointOptions.MaxItemsPerRun ? lastNextLink : null,
             DeltaLink: processed >= _sharePointOptions.MaxItemsPerRun ? null : lastDeltaLink,
@@ -105,7 +150,8 @@ public sealed class SharePointDeltaEngine(
             await stateStore.SaveAsync(newState, cancellationToken);
         }
 
-        logger.LogInformation("SharePoint delta tick processed {processed} file(s).", processed);
+        logger.LogInformation("Delta tick complete: {processed} processed, {updated} updated, {skipped} skipped.",
+            processed, updated, skipped);
     }
 
     private string BuildInitialDeltaUrl(string driveId)
@@ -120,8 +166,6 @@ public sealed class SharePointDeltaEngine(
     private async Task<string> ResolveSiteIdAsync(CancellationToken cancellationToken)
     {
         var siteUri = new Uri(_sharePointOptions.SiteUrl);
-
-        // Graph: GET /sites/{hostname}:/sites/{sitePath}
         var sitePath = siteUri.AbsolutePath.TrimEnd('/');
         var url = $"https://graph.microsoft.com/v1.0/sites/{siteUri.Host}:{sitePath}";
 
@@ -134,6 +178,7 @@ public sealed class SharePointDeltaEngine(
             throw new InvalidOperationException("Unable to resolve site id from SharePoint site URL.");
         }
 
+        logger.LogInformation("Resolved site ID: {siteId}", siteId);
         return siteId;
     }
 
@@ -160,6 +205,7 @@ public sealed class SharePointDeltaEngine(
             var id = drive.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
             if (!string.IsNullOrWhiteSpace(id))
             {
+                logger.LogInformation("Resolved drive '{name}' ID: {id}", name, id);
                 return id;
             }
         }
@@ -167,81 +213,63 @@ public sealed class SharePointDeltaEngine(
         throw new InvalidOperationException($"Drive '{_sharePointOptions.DriveName}' not found on site.");
     }
 
-    private async Task<Dictionary<string, object?>> GetItemFieldsAsync(string driveId, string itemId, CancellationToken cancellationToken)
+    private async Task<(IReadOnlyDictionary<string, object?> Fields, ItemDetails Details)> GetItemFieldsAndDetailsAsync(
+        string driveId, string itemId, CancellationToken cancellationToken)
     {
-        // GET /drives/{driveId}/items/{itemId}?$expand=listItem($expand=fields)
         var url = $"https://graph.microsoft.com/v1.0/drives/{Uri.EscapeDataString(driveId)}/items/{Uri.EscapeDataString(itemId)}?$expand=listItem($expand=fields)";
 
         using var json = await graph.GetJsonAsync(url, cancellationToken);
         var root = json.RootElement;
 
-        if (!root.TryGetProperty("listItem", out var listItem) || listItem.ValueKind != JsonValueKind.Object)
+        // Extrai detalhes do item
+        var details = new ItemDetails
         {
-            return new Dictionary<string, object?>();
-        }
+            Size = root.TryGetProperty("size", out var sizeProp) ? sizeProp.GetInt64() : 0,
+            CreatedDateTime = root.TryGetProperty("createdDateTime", out var createdProp)
+                ? DateTimeOffset.Parse(createdProp.GetString()!)
+                : null,
+            CreatedByDisplayName = ExtractCreatedByDisplayName(root)
+        };
 
-        if (!listItem.TryGetProperty("fields", out var fields) || fields.ValueKind != JsonValueKind.Object)
-        {
-            return new Dictionary<string, object?>();
-        }
+        // Extrai campos existentes
+        var fields = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
 
-        var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var prop in fields.EnumerateObject())
+        if (root.TryGetProperty("listItem", out var listItem) &&
+            listItem.ValueKind == JsonValueKind.Object &&
+            listItem.TryGetProperty("fields", out var fieldsElement) &&
+            fieldsElement.ValueKind == JsonValueKind.Object)
         {
-            if (prop.Name.StartsWith('@'))
+            foreach (var prop in fieldsElement.EnumerateObject())
             {
-                continue;
-            }
+                if (prop.Name.StartsWith('@'))
+                {
+                    continue;
+                }
 
-            dict[prop.Name] = ConvertJson(prop.Value);
+                fields[prop.Name] = ConvertJson(prop.Value);
+            }
         }
 
-        return dict;
+        return (fields, details);
     }
 
-    private IReadOnlyDictionary<string, object?> FilterFields(Dictionary<string, object?> fields)
+    private static string? ExtractCreatedByDisplayName(JsonElement root)
     {
-        if (_sharePointOptions.IncludeFields.Length == 0)
+        if (root.TryGetProperty("createdBy", out var createdBy) &&
+            createdBy.TryGetProperty("user", out var user))
         {
-            return fields;
-        }
-
-        var filtered = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var key in _sharePointOptions.IncludeFields)
-        {
-            if (TryGetField(fields, key, out var value))
+            if (user.TryGetProperty("displayName", out var displayName))
             {
-                filtered[key] = value;
+                return displayName.GetString();
             }
-            else
+
+            if (user.TryGetProperty("email", out var email))
             {
-                logger.LogDebug("SharePoint field '{field}' not found on item. Available fields: {count}.", key, fields.Count);
+                return email.GetString();
             }
         }
 
-        return filtered;
-    }
-
-    private static bool TryGetField(Dictionary<string, object?> fields, string requestedKey, out object? value)
-    {
-        if (fields.TryGetValue(requestedKey, out value))
-        {
-            return true;
-        }
-
-        // SharePoint/Graph often exposes internal field names where spaces are encoded.
-        // Example display name: "Tipo de Documento" -> internal may be "Tipo_x0020_de_x0020_Documento".
-        if (requestedKey.Contains(' '))
-        {
-            var encodedSpaces = requestedKey.Replace(" ", "_x0020_", StringComparison.Ordinal);
-            if (fields.TryGetValue(encodedSpaces, out value))
-            {
-                return true;
-            }
-        }
-
-        value = null;
-        return false;
+        return null;
     }
 
     private static object? ConvertJson(JsonElement element)
@@ -255,4 +283,11 @@ public sealed class SharePointDeltaEngine(
             JsonValueKind.Null => null,
             _ => element.GetRawText(),
         };
+
+    private record ItemDetails
+    {
+        public long Size { get; init; }
+        public DateTimeOffset? CreatedDateTime { get; init; }
+        public string? CreatedByDisplayName { get; init; }
+    }
 }

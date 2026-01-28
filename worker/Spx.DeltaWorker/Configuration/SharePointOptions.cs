@@ -52,4 +52,10 @@ public sealed class SharePointOptions
 
     [Range(1, 300)]
     public int HttpTimeoutSeconds { get; init; } = 100;
+
+    /// <summary>
+    /// Se true, sobrescreve campos mesmo que já tenham valor.
+    /// Se false (padrão), apenas preenche campos vazios.
+    /// </summary>
+    public bool ForceUpdate { get; init; } = false;
 }

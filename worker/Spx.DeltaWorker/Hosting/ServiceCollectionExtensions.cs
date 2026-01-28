@@ -35,6 +35,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IDeltaStateStore, FileDeltaStateStore>();
         services.AddSingleton<IMetadataSink, NdjsonFileMetadataSink>();
 
+        // Updater para PATCH nos campos do SharePoint
+        services.AddSingleton<SharePointFieldsUpdater>();
+
         services.AddSingleton<IDeltaEngine, SharePointDeltaEngine>();
         services.AddHostedService<Worker>();
 
