@@ -3,9 +3,10 @@ using Spx.DeltaWorker.Hosting;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-builder.Host.UseSerilog((context, _, loggerConfiguration) =>
+builder.Services.AddSerilog((services, loggerConfiguration) =>
 	loggerConfiguration
-		.ReadFrom.Configuration(context.Configuration)
+		.ReadFrom.Configuration(builder.Configuration)
+		.ReadFrom.Services(services)
 		.Enrich.FromLogContext());
 
 builder.Services.AddDeltaWorker(builder.Configuration);
