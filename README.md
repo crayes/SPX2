@@ -1,138 +1,172 @@
 # SPX2
 
-SPX2 is a .NET Worker Service for **incremental SharePoint metadata processing** using Microsoft Graph Delta API.
+SPX2 is a .NET Worker Service that synchronizes SharePoint document metadata using Microsoft Graph Delta API. It automatically detects new/modified files and generates intelligent metadata for legal documents.
 
 ## Features
 
-- **Delta API**: Detects new/modified files incrementally (no full scans)
-- **Smart Metadata Generation**: Auto-generates 14 metadata fields for each file
-- **PATCH to SharePoint**: Updates SharePoint columns via Graph API
-- **Parallel Processing**: Configurable workers (default: 20) for high throughput
-- **Adaptive Rate Limiting**: Auto-adjusts request rate on HTTP 429 (ported from Python)
-- **Retry with Backoff**: Handles HTTP 429/503 with exponential backoff
-- **State Persistence**: Saves delta tokens for reliable incremental sync
-
-## Performance
-
-Optimized for large document libraries (200,000+ files):
-
-| Mode | Throughput | Notes |
-|------|------------|-------|
-| Sequential | ~2 files/sec | Single thread |
-| Parallel (20 workers) | ~40 files/sec | Default configuration |
-| With Delta | Only changes | After initial sync, processes only new/modified files |
-
-## Generated Metadata Fields
-
-| Field | Description |
-|-------|-------------|
-| TipoDocumento | Document type (Contrato, Relatorio, Planilha, Email, etc.) |
-| CategoriaInteligente | Smart category (Documento Formal, Financeiro, Comunicacao, etc.) |
-| PalavrasChaveIA | AI-generated keywords from filename |
-| StatusProcessamento | Processing status (Processado, Importado EML) |
-| SubpastaOrigem | Source subfolder path |
-| CaminhoCompleto | Full path including filename |
-| NomeArquivoLimpo | Filename without extension |
-| ExtensaoArquivo | File extension (uppercase) |
-| TamanhoBytes | File size in bytes |
-| DataCriacaoOriginal | Original creation date |
-| DataModificacaoOriginal | Original modification date |
-| DataProcessamentoIA | Processing timestamp |
-| CriadoPor | Created by (user display name) |
-| IdadeArquivoDias | File age in days |
+- **Delta API Sync** - Efficient incremental sync using Microsoft Graph delta tokens
+- **Smart Metadata Generation** - Automatically generates 14 metadata fields based on filename and path
+- **PATCH to SharePoint** - Updates SharePoint list item fields directly
+- **Adaptive Rate Limiting** - Avoids 429 errors with intelligent throttling
+- **Retry Logic** - Handles transient errors with exponential backoff
 
 ## Requirements
 
-- .NET SDK pinned by `global.json`
-- Azure AD App Registration with Graph API permissions:
-  - `Sites.ReadWrite.All`
-  - `Files.ReadWrite.All`
+- .NET SDK 10.0+ (pinned by `global.json`)
+- Azure App Registration with Microsoft Graph permissions:
+  - `Sites.ReadWrite.All` (Application)
+
+Check your SDK:
+
+```bash
+dotnet --info
+```
 
 ## Quick Start
 
+### 1. Clone and Restore
+
 ```bash
-# Restore and build
+git clone https://github.com/crayes/SPX2.git
+cd SPX2
 dotnet restore SPX2.slnx
-dotnet build SPX2.slnx -c Release
-
-# Configure secrets (without < >)
-dotnet user-secrets init --project worker/Spx.DeltaWorker
-dotnet user-secrets set "SharePoint:TenantId" "your-tenant-guid" --project worker/Spx.DeltaWorker
-dotnet user-secrets set "SharePoint:ClientId" "your-app-id" --project worker/Spx.DeltaWorker
-dotnet user-secrets set "SharePoint:ClientSecret" "your-secret" --project worker/Spx.DeltaWorker
-
-# Run
-dotnet run --project worker/Spx.DeltaWorker
+dotnet build SPX2.slnx
 ```
+
+> **Note:** The repository includes `nuget.config` which automatically configures NuGet.org as package source.
+
+### 2. Configure Secrets
+
+Use `dotnet user-secrets` for local development (never commit secrets!):
+
+```bash
+# Initialize user-secrets (only needed once)
+dotnet user-secrets init --project worker/Spx.DeltaWorker
+
+# Configure Azure credentials (replace with your actual values)
+dotnet user-secrets set "SharePoint:TenantId" "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" --project worker/Spx.DeltaWorker
+dotnet user-secrets set "SharePoint:ClientId" "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" --project worker/Spx.DeltaWorker
+dotnet user-secrets set "SharePoint:ClientSecret" "your-client-secret" --project worker/Spx.DeltaWorker
+
+# Enable Delta processing
+dotnet user-secrets set "Delta:Enabled" "true" --project worker/Spx.DeltaWorker
+dotnet user-secrets set "Delta:PollIntervalSeconds" "30" --project worker/Spx.DeltaWorker
+```
+
+**Important:** Do NOT include `< >` in your values - they are just placeholders in documentation.
+
+### 3. Run
+
+```bash
+# Normal run
+dotnet run --project worker/Spx.DeltaWorker
+
+# With debug logging
+dotnet run --project worker/Spx.DeltaWorker -- --Logging:LogLevel:Default=Debug
+```
+
+## Generated Metadata Fields
+
+The worker generates 14 metadata fields for each document:
+
+| Field | Description | Example |
+|-------|-------------|--------|
+| `TipoDocumento` | Document type by extension | `Contrato`, `Relatorio`, `Email` |
+| `CategoriaInteligente` | Intelligent category | `Documento Formal`, `Comunicacao` |
+| `PalavrasChaveIA` | Keywords from filename | `contrato, locacao, imovel` |
+| `StatusProcessamento` | Processing status | `Processado` |
+| `SubpastaOrigem` | Parent folder name | `Contratos 2024` |
+| `CaminhoCompleto` | Full path in library | `/sites/copilot/Docs/Contratos` |
+| `NomeArquivoLimpo` | Filename without extension | `Contrato de Locação` |
+| `ExtensaoArquivo` | File extension | `.pdf` |
+| `TamanhoBytes` | File size | `1048576` |
+| `DataCriacaoOriginal` | Creation date | `2024-01-15T10:30:00Z` |
+| `DataModificacaoOriginal` | Modified date | `2024-06-20T14:45:00Z` |
+| `DataProcessamentoIA` | Processing timestamp | `2024-06-21T08:00:00Z` |
+| `CriadoPor` | Created by | `João Silva` |
+| `IdadeArquivoDias` | Age in days | `157` |
 
 ## Configuration
 
-See [docs/configuration.md](docs/configuration.md) for full options.
+See [docs/configuration.md](docs/configuration.md) for detailed configuration options.
 
-Minimal `appsettings.json`:
+### Key Settings
 
-```json
-{
-  "Delta": {
-    "Enabled": true,
-    "PollIntervalSeconds": 7200,
-    "MaxWorkers": 20,
-    "RateLimitPerSecond": 20
-  },
-  "SharePoint": {
-    "SiteUrl": "https://contoso.sharepoint.com/sites/documents",
-    "DriveName": "Documentos",
-    "ForceUpdate": false
-  }
-}
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `Delta:Enabled` | `false` | Enable/disable delta processing |
+| `Delta:PollIntervalSeconds` | `5` | Interval between delta checks |
+| `SharePoint:ForceUpdate` | `false` | Overwrite existing field values |
+| `SharePoint:SiteUrl` | - | SharePoint site URL |
+| `SharePoint:DriveName` | `Documentos` | Document library name |
+
+### Environment Variables
+
+For production, use environment variables:
+
+```bash
+export Delta__Enabled=true
+export Delta__PollIntervalSeconds=7200
+export SharePoint__TenantId=xxx
+export SharePoint__ClientId=xxx
+export SharePoint__ClientSecret=xxx
 ```
 
-## Architecture
+## Troubleshooting
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     SPX2 Worker Service                         │
-├─────────────────────────────────────────────────────────────────┤
-│  1. Timer triggers every N seconds (PollIntervalSeconds)       │
-│  2. Delta API detects new/modified files                       │
-│  3. Parallel.ForEachAsync processes batch with N workers       │
-│  4. AdaptiveRateLimiter controls request rate (auto-adjusts)   │
-│  5. MetadataGenerator creates 14 smart fields                  │
-│  6. SharePointFieldsUpdater PATCHes SharePoint columns         │
-│  7. State saved for next incremental run                       │
-└─────────────────────────────────────────────────────────────────┘
+### NuGet Restore Fails
+
+If `dotnet restore` fails with "Unable to resolve" errors, verify NuGet source:
+
+```bash
+dotnet nuget list source
 ```
 
-## Adaptive Rate Limiting
+Should show `nuget.org`. If empty:
 
-Ported from Python (`sharepoint_ultra/rate_limiter.py`):
-
-- Starts at configured rate (default: 20 req/s)
-- On HTTP 429: reduces rate by 50% (20 → 10 → 5)
-- On success: gradually increases rate
-- Respects `Retry-After` header from Graph API
-
+```bash
+dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org
 ```
-⚠️ Rate limited (429). Reducing rate to 10/s. Waiting 30s...
-```
+
+### Invalid Tenant ID
+
+Error: `Invalid tenant id provided`
+
+- Verify you're using the actual GUID, not placeholder text
+- Find your Tenant ID: Azure Portal → Microsoft Entra ID → Overview → Tenant ID
+
+### Rate Limiting (429)
+
+The worker includes adaptive rate limiting. If you still see 429 errors:
+
+1. Increase `Delta:PollIntervalSeconds`
+2. Reduce concurrent requests in code
 
 ## Repo Layout
 
-- `worker/Spx.DeltaWorker/` — Production worker service
-  - `Application/` — Business logic (DeltaEngine, MetadataGenerator)
-  - `Infrastructure/` — Graph API client, RateLimiter, state persistence
-  - `Configuration/` — Options classes
-  - `Hosting/` — DI setup
-- `tests/` — xUnit tests
-- `docs/` — Documentation
-
-## Documentation
-
-- [Configuration](docs/configuration.md)
-- [Runbook](docs/runbook.md)
-- [Release/Deploy](docs/release-deploy.md)
-- [Development](docs/development.md)
+```
+SPX2/
+├── worker/Spx.DeltaWorker/     # Production worker service
+│   ├── Application/            # Business logic (DeltaEngine, MetadataGenerator)
+│   ├── Infrastructure/         # Graph API client, state stores
+│   ├── Configuration/          # Options classes
+│   └── Hosting/                # DI extensions
+├── tests/                      # xUnit tests
+├── docs/                       # Documentation
+├── tools/                      # Legacy/archived (not production)
+├── nuget.config                # NuGet package source config
+└── SPX2.slnx                   # Solution file
+```
 
 ## Related Projects
 
-- [Sharepoint_Extrator_14.9](https://github.com/crayes/Sharepoint_Extrator_14.9) — Python version (maintenance: empty folders, old files cleanup)
+- [Sharepoint_Extrator_14.9](https://github.com/crayes/Sharepoint_Extrator_14.9) - Python version (maintenance scripts)
+
+## CI
+
+GitHub Actions runs on pushes/PRs to `main`:
+
+- `dotnet restore/build/test`
+- `dotnet format --verify-no-changes`
+
+See [docs/development.md](docs/development.md) for development guidelines.
