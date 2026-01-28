@@ -16,6 +16,7 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddDeltaWorker(this IServiceCollection services, IConfiguration configuration)
     {
+        // 1. Configurações
         services.AddOptions<DeltaOptions>()
             .Bind(configuration.GetSection(DeltaOptions.SectionName))
             .ValidateDataAnnotations();
@@ -25,25 +26,14 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IValidateOptions<SharePointOptions>, SharePointOptionsValidator>();
 
+        // 2. Credenciais Azure
         services.AddSingleton<TokenCredential>(sp =>
         {
             var options = sp.GetRequiredService<IOptions<SharePointOptions>>().Value;
             return new ClientSecretCredential(options.TenantId, options.ClientId, options.ClientSecret);
         });
 
-        services.AddHttpClient<GraphApiClient>((sp, client) =>
-        {
-            var options = sp.GetRequiredService<IOptions<SharePointOptions>>().Value;
-            client.Timeout = TimeSpan.FromSeconds(options.HttpTimeoutSeconds);
-        });
-
-        services.AddSingleton<IDeltaStateStore, FileDeltaStateStore>();
-        services.AddSingleton<IMetadataSink, NdjsonFileMetadataSink>();
-
-        // Updater para PATCH nos campos do SharePoint
-        services.AddSingleton<SharePointFieldsUpdater>();
-
-        // Rate limiter adaptativo (portado do Python)
+        // 3. Rate limiter adaptativo (portado do Python) - ANTES do GraphApiClient
         services.AddSingleton<AdaptiveRateLimiter>(sp =>
         {
             var options = sp.GetRequiredService<IOptions<DeltaOptions>>().Value;
@@ -51,6 +41,21 @@ public static class ServiceCollectionExtensions
             return new AdaptiveRateLimiter(logger, options.RateLimitPerSecond);
         });
 
+        // 4. HTTP Client para Graph API
+        services.AddHttpClient<GraphApiClient>((sp, client) =>
+        {
+            var options = sp.GetRequiredService<IOptions<SharePointOptions>>().Value;
+            client.Timeout = TimeSpan.FromSeconds(options.HttpTimeoutSeconds);
+        });
+
+        // 5. State e Sink
+        services.AddSingleton<IDeltaStateStore, FileDeltaStateStore>();
+        services.AddSingleton<IMetadataSink, NdjsonFileMetadataSink>();
+
+        // 6. Updater para PATCH nos campos do SharePoint
+        services.AddSingleton<SharePointFieldsUpdater>();
+
+        // 7. Delta Engine
         services.AddSingleton<IDeltaEngine, SharePointDeltaEngine>();
         services.AddHostedService<Worker>();
 

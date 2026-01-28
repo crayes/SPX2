@@ -8,6 +8,30 @@ The worker binds options from the `Delta` configuration section.
 |---------|------|---------|-------------|
 | `Delta:Enabled` | bool | `false` | Enable/disable delta processing |
 | `Delta:PollIntervalSeconds` | int | `5` | Interval between delta checks (1-3600) |
+| `Delta:MaxWorkers` | int | `20` | Parallel workers for processing (1-50) |
+| `Delta:RateLimitPerSecond` | int | `20` | Max requests per second (1-100) |
+
+### Parallel Processing
+
+The worker uses `Parallel.ForEachAsync` with `MaxWorkers` for concurrent file processing:
+
+- Default: 20 workers (ported from Python `MAX_WORKERS`)
+- Recommended: 10-30 for most scenarios
+- Higher values may trigger Graph API throttling
+
+### Adaptive Rate Limiting
+
+The `AdaptiveRateLimiter` automatically adjusts request rate:
+
+- Starts at `RateLimitPerSecond` (default: 20/s)
+- On HTTP 429: reduces by 50% (20 → 10 → 5, minimum: 5)
+- On success: gradually increases (+5, up to 2x initial rate)
+- Respects `Retry-After` header from Graph API
+
+Log example:
+```
+⚠️ Rate limited (429). Reducing rate to 10/s. Waiting 30s...
+```
 
 ## SharePoint Settings
 
@@ -36,7 +60,9 @@ The worker binds options from the `Delta` configuration section.
 {
   "Delta": {
     "Enabled": true,
-    "PollIntervalSeconds": 7200
+    "PollIntervalSeconds": 7200,
+    "MaxWorkers": 20,
+    "RateLimitPerSecond": 20
   },
   "SharePoint": {
     "SiteUrl": "https://rfaasp.sharepoint.com/sites/copilot",
@@ -58,6 +84,8 @@ The worker binds options from the `Delta` configuration section.
 ```bash
 export Delta__Enabled=true
 export Delta__PollIntervalSeconds=7200
+export Delta__MaxWorkers=20
+export Delta__RateLimitPerSecond=20
 export SharePoint__TenantId="your-tenant-id"
 export SharePoint__ClientId="your-client-id"
 export SharePoint__ClientSecret="your-secret"
@@ -69,10 +97,48 @@ export SharePoint__ForceUpdate=false
 ### User Secrets (Development)
 
 ```bash
-dotnet user-secrets set "SharePoint:TenantId" "<tenant-guid>" --project worker/Spx.DeltaWorker
-dotnet user-secrets set "SharePoint:ClientId" "<app-id>" --project worker/Spx.DeltaWorker
-dotnet user-secrets set "SharePoint:ClientSecret" "<secret>" --project worker/Spx.DeltaWorker
+# Initialize (first time only)
+dotnet user-secrets init --project worker/Spx.DeltaWorker
+
+# Set credentials (without < >)
+dotnet user-secrets set "SharePoint:TenantId" "your-tenant-guid" --project worker/Spx.DeltaWorker
+dotnet user-secrets set "SharePoint:ClientId" "your-app-id" --project worker/Spx.DeltaWorker
+dotnet user-secrets set "SharePoint:ClientSecret" "your-secret" --project worker/Spx.DeltaWorker
+
+# Verify
+dotnet user-secrets list --project worker/Spx.DeltaWorker
 ```
+
+## Performance Tuning
+
+### Large Libraries (200,000+ files)
+
+Recommended settings for large document libraries:
+
+```json
+{
+  "Delta": {
+    "Enabled": true,
+    "PollIntervalSeconds": 7200,
+    "MaxWorkers": 20,
+    "RateLimitPerSecond": 20
+  },
+  "SharePoint": {
+    "MaxItemsPerRun": 1000
+  }
+}
+```
+
+| Scenario | MaxWorkers | RateLimitPerSecond | Notes |
+|----------|------------|-------------------|-------|
+| Conservative | 10 | 10 | Avoid throttling |
+| Balanced | 20 | 20 | Default, good for most cases |
+| Aggressive | 30 | 30 | May trigger 429s, auto-adjusts |
+
+### First Run vs Incremental
+
+- **First run**: Processes all files (may take hours for large libraries)
+- **Subsequent runs**: Delta API returns only changes (minutes)
 
 ## Generated Metadata Fields
 
@@ -120,3 +186,22 @@ Ensure your SharePoint library has these columns created:
 ## Validation
 
 Options use DataAnnotations validation. Invalid values cause startup failure.
+
+## Troubleshooting
+
+### HTTP 429 Too Many Requests
+
+The worker handles this automatically:
+1. Reduces rate by 50%
+2. Waits for `Retry-After` duration
+3. Retries the request
+
+If happening frequently, reduce `MaxWorkers` and `RateLimitPerSecond`.
+
+### HTTP 503 Service Unavailable
+
+Graph API temporary issue. Worker retries with exponential backoff.
+
+### "Invalid tenant id provided"
+
+Check `user-secrets list` - ensure TenantId is a valid GUID without `< >`.
